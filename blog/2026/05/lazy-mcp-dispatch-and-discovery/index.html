@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="How to reduce token waste from large MCP tool catalogues using a two-tool dispatch pattern with lazy discovery via help and call.">
+  <title>Lazy MCP: Dispatch and Discovery — Andy Smith</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <article>
+    <h1>Lazy MCP: Dispatch and Discovery</h1>
+    <p><a href="/">Andy Smith</a> · May 25, 2026</p>
+    <hr>
+    <p>MCP is now used everywhere, and some products exist only as MCP servers. Some of these MCPs contain dozens or even hundreds of tools, and that creates a real problem when working with them.</p>
+
+    <h2>The problem</h2>
+
+    <p>The manifest of such an MCP is shipped in every LLM call, which means token usage grows proportionally with the size of the tool catalogue. The cost of running an agent system that depends on these MCPs grows accordingly. Prompt caching lets you reduce that cost (see <a href="https://www.ibm.com/think/topics/prompt-caching">IBM's overview</a> and <a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching">Anthropic's documentation</a>), but it doesn't solve the problem of context window pollution.</p>
+
+    <p>There's also a defocus effect: a weaker LLM can struggle to choose the right tool from a long list, and that affects the quality of the result. The <a href="https://openreview.net/forum?id=2GmDdhBdDk">Berkeley Function Calling Leaderboard (BFCL)</a> measures function-calling quality directly and shows that smaller models visibly degrade. <a href="https://arxiv.org/abs/2307.16789">ToolLLM</a> frames the same regime as a learning problem: how to teach an LLM to work with 16K+ APIs.</p>
+
+    <p>The root issue is that the full information about every tool is sent on every request — while in practice only one or two tools from the entire list will actually be used.</p>
+
+    <h2>An optimization</h2>
+
+    <p>This can be optimized. Suppose we have an MCP for working with notes, and we want to implement two basic tools: <code>create(text)</code> and <code>find(keywords)</code>. Instead of implementing them as separate MCP tools, we can expose a single one: <code>notes_mcp_call(method, params)</code>. Then we'd invoke them as <code>call('create', ['Hello, World'])</code> and <code>call('find', ['notes about emacs'])</code>.</p>
+
+    <p>Effectively, this is untyped RPC dispatch on top of MCP, whereas the conventional approach is to expose each method as its own typed tool. Naturally, this isn't a silver bullet — choosing one approach over the other is a real architectural decision for the MCP developer. The proposed approach pays off most when the number of tools is genuinely large. And for dynamic MCPs, where the set of methods isn't known ahead of time, it's arguably the only viable option.</p>
+
+    <h2>The discovery problem</h2>
+
+    <p>With this approach, a discovery problem appears immediately. The LLM has to learn somehow what methods this MCP exposes — but at the same time it shouldn't receive the full list of tools all at once.</p>
+
+    <p>So we also need a service method, <code>help</code>. It can be implemented as <code>call('help', ['create'])</code>, or as a separate MCP tool.</p>
+
+    <p>Regardless of how <code>help</code> is implemented, it can operate in several modes.</p>
+
+    <p>The first mode is keyword search (or semantic search). The LLM asks the MCP something like "how do I create a new note?" and gets back a list of tools with their descriptions, parameter lists, and result descriptions. This is very easy to implement, but it requires maintaining semantic search infrastructure, including embedding the incoming queries. There's a bigger issue, though: building a complete map of available methods is hard for the LLM, because it doesn't know all of the MCP's capabilities — and so the discovery goal isn't actually reached. The model has to <em>already</em> know what it needs from the MCP.</p>
+
+    <p>The second mode is FSM-style discovery: <code>help</code> ships wiki-like documentation with cross-links. <code>help</code> without parameters returns a general overview and links to other pages. The LLM reads the wiki sequentially and assembles information about all the pages. This mode can be combined with search; it enables real discovery, but it requires extra effort from the MCP developer to maintain that documentation. As a side note: nothing stops you from implementing just a single FSM state with the full list of tools — in that case the mechanism behaves very close to the default MCP behaviour.</p>
+
+    <h2>The final design</h2>
+
+    <p>So the MCP manifest ends up containing two tools: <code>help</code> and <code>call</code>. The description of <code>call</code> should include the call format, instructions on how to use <code>help</code> for discovery, and optionally a description of the most frequently used methods — so the LLM doesn't have to go through <code>help</code> for every little thing.</p>
+
+    <h2>What already exists</h2>
+
+    <p>Before building this ourselves, let's look at what already exists in the industry.</p>
+
+    <p>Anthropic implements dynamic tool loading in its own products through <code>tool_search</code>, but this doesn't work in other vendors, so it can't be used as a universal pattern.</p>
+
+    <p>There's a draft standard proposal, <a href="https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1821">SEP-1821</a>, which extends the MCP standard with keyword search. This is partly what I need, but it doesn't enable flexible FSM-style documentation.</p>
+
+    <p>Speakeasy implements a very similar pattern in their tool Gram (see their <a href="https://www.speakeasy.com/blog/100x-token-reduction-dynamic-toolsets">blog post</a> and the <a href="https://www.speakeasy.com/docs/mcp/build/toolsets/dynamic-toolsets">documentation</a>).</p>
+  </article>
+</body>
+</html>
